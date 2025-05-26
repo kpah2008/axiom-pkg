@@ -18,7 +18,6 @@
 typedef struct {
     char name[50];
     char repo[256];
-    char repo_type[20];
     char custom_cmds[MAX_CUSTOM_CMDS][256];
     int custom_cmd_count;
     char installed;
@@ -107,7 +106,6 @@ void load_config() {
     int in_package_section = 0;
     char current_name[50] = {0};
     char current_repo[256] = {0};
-    char current_repo_type[20] = "git";
     char current_cmds[MAX_CUSTOM_CMDS][256] = {0};
     int current_cmd_count = 0;
     int reading_repo = 0;
@@ -125,7 +123,6 @@ void load_config() {
                 if (current_name[0] != '\0' && package_count < MAX_PACKAGES) {
                     strcpy(packages[package_count].name, current_name);
                     strcpy(packages[package_count].repo, current_repo);
-                    strcpy(packages[package_count].repo_type, current_repo_type);
                     for (int i = 0; i < current_cmd_count; i++) {
                         strcpy(packages[package_count].custom_cmds[i], current_cmds[i]);
                     }
@@ -143,27 +140,12 @@ void load_config() {
                 strncpy(current_name, line + 1, end - line - 1);
                 current_name[end - line - 1] = '\0';
                 current_repo[0] = '\0';
-                strcpy(current_repo_type, "git");
                 memset(current_cmds, 0, sizeof(current_cmds));
                 current_cmd_count = 0;
                 reading_repo = 1;
             } 
             else if (reading_repo && strlen(line) > 0) {
-                if (strncmp(line, "git:", 4) == 0) {
-                    strcpy(current_repo_type, "git");
-                    strcpy(current_repo, line + 4);
-                }
-                else if (strncmp(line, "http:", 5) == 0 || strncmp(line, "https:", 6) == 0) {
-                    strcpy(current_repo_type, "http");
-                    strcpy(current_repo, line);
-                }
-                else if (strncmp(line, "file:", 5) == 0) {
-                    strcpy(current_repo_type, "file");
-                    strcpy(current_repo, line + 5);
-                }
-                else {
-                    strcpy(current_repo, line);
-                }
+                strcpy(current_repo, line);
                 reading_repo = 0;
             }
             else if (strstr(line, "system{") != NULL && strchr(line, '}') != NULL && current_cmd_count < MAX_CUSTOM_CMDS) {
@@ -181,7 +163,6 @@ void load_config() {
     if (current_name[0] != '\0' && package_count < MAX_PACKAGES) {
         strcpy(packages[package_count].name, current_name);
         strcpy(packages[package_count].repo, current_repo);
-        strcpy(packages[package_count].repo_type, current_repo_type);
         for (int i = 0; i < current_cmd_count; i++) {
             strcpy(packages[package_count].custom_cmds[i], current_cmds[i]);
         }
@@ -196,6 +177,26 @@ void load_config() {
     }
 
     fclose(file);
+}
+
+void search_package(const char *search_term) {
+    printf("Searching for packages matching '%s':\n", search_term);
+    int found = 0;
+    
+    for (int i = 0; i < package_count; i++) {
+        if (strstr(packages[i].name, search_term) != NULL || 
+            strstr(packages[i].repo, search_term) != NULL) {
+            printf("[%s] %s - %s\n", 
+                   packages[i].installed ? "X" : " ", 
+                   packages[i].name, 
+                   packages[i].repo);
+            found = 1;
+        }
+    }
+    
+    if (!found) {
+        printf("No packages found matching '%s'\n", search_term);
+    }
 }
 
 void install_package(const char *package_name) {
@@ -219,36 +220,12 @@ void install_package(const char *package_name) {
     char package_path[512];
     snprintf(package_path, sizeof(package_path), "%s%s/%s", home, PACKAGE_DIR, package_name);
 
-    printf("Installing package '%s' from %s (%s)\n", package_name, pkg->repo, pkg->repo_type);
+    printf("Installing package '%s' from %s\n", package_name, pkg->repo);
 
-    if (strcmp(pkg->repo_type, "git") == 0) {
-        char clone_cmd[512];
-        snprintf(clone_cmd, sizeof(clone_cmd), "git clone %s %s", pkg->repo, package_path);
-        if (system(clone_cmd) != 0) {
-            fprintf(stderr, "Error cloning repository\n");
-            exit(1);
-        }
-    }
-    else if (strcmp(pkg->repo_type, "http") == 0 || strcmp(pkg->repo_type, "https") == 0) {
-        char download_cmd[512];
-        snprintf(download_cmd, sizeof(download_cmd), "mkdir -p %s && cd %s && curl -L %s | tar xz --strip-components=1", 
-                package_path, package_path, pkg->repo);
-        if (system(download_cmd) != 0) {
-            fprintf(stderr, "Error downloading archive\n");
-            exit(1);
-        }
-    }
-    else if (strcmp(pkg->repo_type, "file") == 0) {
-        char copy_cmd[512];
-        snprintf(copy_cmd, sizeof(copy_cmd), "mkdir -p %s && cp -r %s/* %s/", 
-                package_path, pkg->repo, package_path);
-        if (system(copy_cmd) != 0) {
-            fprintf(stderr, "Error copying files\n");
-            exit(1);
-        }
-    }
-    else {
-        fprintf(stderr, "Error: Unknown repository type '%s'\n", pkg->repo_type);
+    char clone_cmd[512];
+    snprintf(clone_cmd, sizeof(clone_cmd), "git clone %s %s", pkg->repo, package_path);
+    if (system(clone_cmd) != 0) {
+        fprintf(stderr, "Error cloning repository\n");
         exit(1);
     }
 
@@ -305,11 +282,10 @@ void remove_package(const char *package_name) {
 void list_all_packages() {
     printf("Available packages:\n");
     for (int i = 0; i < package_count; i++) {
-        printf("[%s] %s - %s (%s)\n", 
+        printf("[%s] %s - %s\n", 
                packages[i].installed ? "X" : " ", 
                packages[i].name, 
-               packages[i].repo,
-               packages[i].repo_type);
+               packages[i].repo);
     }
 }
 
@@ -324,54 +300,47 @@ void upgrade_packages() {
 
             printf("Checking for updates in '%s'...\n", packages[i].name);
             
-            if (strcmp(packages[i].repo_type, "git") == 0) {
-                char fetch_cmd[512];
-                snprintf(fetch_cmd, sizeof(fetch_cmd), "cd %s && git fetch", package_path);
-                if (system(fetch_cmd) != 0) {
-                    fprintf(stderr, "Error fetching updates for '%s'\n", packages[i].name);
-                    continue;
-                }
-
-                char check_cmd[512];
-                snprintf(check_cmd, sizeof(check_cmd), 
-                         "cd %s && git diff --quiet origin/main", package_path);
-                int has_updates = system(check_cmd);
-                
-                if (has_updates != 0) {
-                    printf("Updating package '%s'...\n", packages[i].name);
-                    
-                    char pull_cmd[512];
-                    snprintf(pull_cmd, sizeof(pull_cmd), "cd %s && git pull", package_path);
-                    if (system(pull_cmd) != 0) {
-                        fprintf(stderr, "Error pulling updates for '%s'\n", packages[i].name);
-                        continue;
-                    }
-                } else {
-                    printf("Package '%s' is up to date\n", packages[i].name);
-                    continue;
-                }
-            }
-            else {
-                printf("Package '%s' cannot be automatically updated (non-git repo)\n", packages[i].name);
+            char fetch_cmd[512];
+            snprintf(fetch_cmd, sizeof(fetch_cmd), "cd %s && git fetch", package_path);
+            if (system(fetch_cmd) != 0) {
+                fprintf(stderr, "Error fetching updates for '%s'\n", packages[i].name);
                 continue;
             }
-            
-            char make_cmd[512];
-            snprintf(make_cmd, sizeof(make_cmd), "cd %s && sudo make install", package_path);
-            if (system(make_cmd) != 0) {
-                fprintf(stderr, "Error reinstalling '%s'\n", packages[i].name);
-            } else {
-                printf("Successfully updated '%s'\n", packages[i].name);
-            }
 
-            for (int j = 0; j < packages[i].custom_cmd_count; j++) {
-                printf("Running custom command %d: %s\n", j+1, packages[i].custom_cmds[j]);
-                char custom_cmd[512];
-                snprintf(custom_cmd, sizeof(custom_cmd), "cd %s && %s", 
-                         package_path, packages[i].custom_cmds[j]);
-                if (system(custom_cmd) != 0) {
-                    fprintf(stderr, "Error running custom command\n");
+            char check_cmd[512];
+            snprintf(check_cmd, sizeof(check_cmd), 
+                     "cd %s && git diff --quiet origin/main", package_path);
+            int has_updates = system(check_cmd);
+            
+            if (has_updates != 0) {
+                printf("Updating package '%s'...\n", packages[i].name);
+                
+                char pull_cmd[512];
+                snprintf(pull_cmd, sizeof(pull_cmd), "cd %s && git pull", package_path);
+                if (system(pull_cmd) != 0) {
+                    fprintf(stderr, "Error pulling updates for '%s'\n", packages[i].name);
+                    continue;
                 }
+                
+                char make_cmd[512];
+                snprintf(make_cmd, sizeof(make_cmd), "cd %s && sudo make install", package_path);
+                if (system(make_cmd) != 0) {
+                    fprintf(stderr, "Error reinstalling '%s'\n", packages[i].name);
+                } else {
+                    printf("Successfully updated '%s'\n", packages[i].name);
+                }
+
+                for (int j = 0; j < packages[i].custom_cmd_count; j++) {
+                    printf("Running custom command %d: %s\n", j+1, packages[i].custom_cmds[j]);
+                    char custom_cmd[512];
+                    snprintf(custom_cmd, sizeof(custom_cmd), "cd %s && %s", 
+                             package_path, packages[i].custom_cmds[j]);
+                    if (system(custom_cmd) != 0) {
+                        fprintf(stderr, "Error running custom command\n");
+                    }
+                }
+            } else {
+                printf("Package '%s' is up to date\n", packages[i].name);
             }
         }
     }
@@ -417,12 +386,13 @@ void autoremove() {
 }
 
 void print_help() {
-    printf("AXiom Package Manager (AxPKG)\n");
+    printf("AXiom Package Manager (AxPack)\n");
     printf("Usage:\n");
     printf("  axpack install <package>  Install a package\n");
     printf("  axpack remove <package>   Remove a package\n");
     printf("  axpack upgrade            Upgrade all installed packages\n");
     printf("  axpack update             Update .axiomrc configuration\n");
+    printf("  axpack search <term>      Search for packages\n");
     printf("  axpack -all               List all available packages\n");
     printf("  axpack autoremove         Clean package directory\n");
     printf("  axpack help               Show this help message\n");
@@ -457,6 +427,13 @@ int main(int argc, char *argv[]) {
     else if (strcmp(argv[1], "update") == 0) {
         update_config_file();
         load_config();
+    }
+    else if (strcmp(argv[1], "search") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Error: Search term not specified\n");
+            return 1;
+        }
+        search_package(argv[2]);
     }
     else if (strcmp(argv[1], "-all") == 0) {
         list_all_packages();
